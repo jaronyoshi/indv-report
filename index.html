@@ -1,0 +1,355 @@
+<!--
+  PDF FLIPBOOK — single-file viewer
+  --------------------------------------------------------------------------
+  DEPLOY ON YOUR SITE
+  1. Put your A4 PDF next to this file (e.g. report.pdf).
+  2. Set CONFIG.pdfUrl below to its filename, e.g. "report.pdf".
+  3. Upload both. Point your QR code at the page URL.
+
+  TEST LOCALLY
+  Just double-click this file to open it in a browser, then drop a PDF on it.
+  (The preview pane inside a chat tool may sandbox/block PDF.js — a real
+  browser tab or your live site will not.)
+
+  TYPE: swap --font-sans / --font-mono below, or add @font-face for
+  ABC Diatype / Apris to match your portfolio.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Portfolio Report</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --paper:#E9E7E2; --paper-2:#F2F0EB; --ink:#16150F;
+    --muted:#8A887F; --hair:#CFCCC4; --shadow:rgba(20,21,15,.22);
+    --font-sans:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"Roboto Mono",Menlo,Consolas,monospace;
+    --flip-ms:680ms; --ease:cubic-bezier(.46,.03,.30,1);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-sans);
+    -webkit-font-smoothing:antialiased;overflow:hidden;overscroll-behavior:none;}
+
+  .bar{position:fixed;left:0;right:0;z-index:30;display:flex;align-items:baseline;
+    justify-content:space-between;padding:18px clamp(16px,4vw,34px);pointer-events:none;}
+  .bar.top{top:0;} .bar.bottom{bottom:0;}
+  .title{font-size:11px;letter-spacing:.18em;text-transform:uppercase;font-weight:600;}
+  .right{display:flex;align-items:baseline;gap:18px;pointer-events:auto;}
+  .counter{font-family:var(--font-mono);font-size:12px;letter-spacing:.04em;color:var(--muted);
+    font-variant-numeric:tabular-nums;}
+  .counter b{color:var(--ink);font-weight:500;}
+  .dl{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--muted);
+    text-decoration:none;border-bottom:1px solid var(--hair);padding-bottom:2px;}
+  .dl:hover{color:var(--ink);border-color:var(--ink);}
+
+  .track{position:fixed;left:0;right:0;bottom:0;height:2px;z-index:30;}
+  .track i{display:block;height:100%;width:0%;background:var(--ink);
+    transition:width var(--flip-ms) var(--ease);}
+
+  .stage{position:fixed;inset:0;z-index:10;display:grid;place-items:center;
+    overflow:hidden;touch-action:pan-y;}
+  .book{position:relative;perspective:2400px;-webkit-tap-highlight-color:transparent;
+    transition:width var(--flip-ms) var(--ease),height var(--flip-ms) var(--ease);}
+
+  .page{position:absolute;inset:0;border-radius:2px;overflow:hidden;}
+  /* NOTE: no overflow:hidden on .flipper — it would force transform-style:flat and
+     defeat backface-visibility, so the turning leaf's mirrored back would show through. */
+  .flipper{position:absolute;inset:0;}
+  .page{background:#fff;box-shadow:0 18px 50px -12px var(--shadow),0 2px 8px -2px rgba(20,21,15,.12);}
+  .page img,.flipper .front img{position:absolute;inset:0;width:100%;height:100%;
+    object-fit:contain;background:#fff;user-select:none;-webkit-user-drag:none;}
+  .page::after{content:"";position:absolute;top:0;bottom:0;left:0;width:8%;
+    background:linear-gradient(90deg,rgba(20,21,15,.10),transparent);pointer-events:none;}
+
+  .flipper{transform-origin:left center;transform-style:preserve-3d;z-index:5;
+    will-change:transform;pointer-events:none;}
+  .flipper .face{position:absolute;inset:0;backface-visibility:hidden;
+    -webkit-backface-visibility:hidden;border-radius:2px;overflow:hidden;background:#fff;}
+  .flipper .front{box-shadow:0 18px 50px -12px var(--shadow);}
+  .flipper .shade{position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:linear-gradient(105deg,rgba(20,21,15,.42),rgba(20,21,15,0) 55%);}
+  .flipper.next{animation:flipNext var(--flip-ms) var(--ease) forwards;}
+  .flipper.prev{animation:flipPrev var(--flip-ms) var(--ease) forwards;}
+  .flipper.next .shade,.flipper.prev .shade{animation:shadeRun var(--flip-ms) var(--ease) forwards;}
+  /* The leaf is a SINGLE sheet: it lifts off the stack and turns up to vertical,
+     revealing the next page beneath. At 90° it's edge-on and backface-visibility
+     culls it — so it cleanly vanishes instead of laying its blank back beside the
+     page. "prev" is the mirror: the returning page swings down from vertical. */
+  @keyframes flipNext{from{transform:rotateY(0deg);}to{transform:rotateY(-90deg);}}
+  @keyframes flipPrev{from{transform:rotateY(-90deg);}to{transform:rotateY(0deg);}}
+  @keyframes shadeRun{0%{opacity:0;}60%{opacity:.5;}100%{opacity:.9;}}
+
+  .nav{position:fixed;top:0;bottom:0;z-index:25;width:clamp(56px,9vw,120px);
+    display:grid;place-items:center;border:0;background:transparent;cursor:pointer;
+    color:var(--ink);opacity:.35;transition:opacity .25s ease;}
+  .nav:hover{opacity:1;} .nav:disabled{opacity:0;pointer-events:none;}
+  .nav.left{left:0;} .nav.right{right:0;} .nav svg{width:26px;height:26px;}
+  .nav:focus-visible{outline:2px solid var(--ink);outline-offset:-8px;opacity:1;}
+  @media (max-width:760px){.nav{display:none;}}
+
+  .drop,.loader{position:fixed;inset:0;z-index:40;display:grid;place-items:center;
+    text-align:center;background:var(--paper);padding:24px;}
+  .drop.hidden,.loader:not(.on){display:none;}
+  .drop .inner{max-width:440px;border:1px dashed var(--hair);border-radius:4px;padding:48px 36px;
+    transition:border-color .2s ease,background .2s ease;}
+  .drop.drag .inner{border-color:var(--ink);background:#fff;}
+  .drop h1{font-size:13px;letter-spacing:.16em;text-transform:uppercase;margin:0 0 14px;font-weight:600;}
+  .drop p{margin:0 0 22px;color:var(--muted);font-size:14px;line-height:1.55;}
+  .drop p.note{font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:18px;}
+  .err{color:#9a2b1f;}
+  .pick{display:inline-block;font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;
+    padding:10px 18px;border:1px solid var(--ink);border-radius:2px;cursor:pointer;
+    background:var(--ink);color:var(--paper);}
+  .pick:focus-visible{outline:2px solid var(--ink);outline-offset:3px;}
+  .loader .lab{font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;color:var(--muted);}
+  .loader .lab b{color:var(--ink);font-weight:500;}
+  .loader .meter{width:min(220px,60vw);height:2px;background:var(--hair);margin:16px auto 0;overflow:hidden;}
+  .loader .meter i{display:block;height:100%;width:0%;background:var(--ink);transition:width .15s linear;}
+
+  @media (prefers-reduced-motion:reduce){
+    .flipper.next,.flipper.prev,.flipper .shade,.track i{animation:none !important;transition:none !important;}
+  }
+</style>
+</head>
+<body>
+  <div class="bar top">
+    <span class="title" id="title">Portfolio Report</span>
+    <span class="right">
+      <a class="dl" id="dl" href="#" download hidden>Download PDF</a>
+      <span class="counter" id="counter" hidden><b id="cur">00</b> / <span id="tot">00</span></span>
+    </span>
+  </div>
+
+  <div class="stage" id="stage" hidden>
+    <div class="book" id="book">
+      <div class="page" id="page"><img id="pageImg" alt="" /></div>
+    </div>
+  </div>
+
+  <button class="nav left" id="prev" aria-label="Previous page" disabled hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <button class="nav right" id="next" aria-label="Next page" disabled hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+
+  <div class="track" hidden id="track"><i id="trackFill"></i></div>
+
+  <div class="drop hidden" id="drop">
+    <div class="inner" id="dropInner">
+      <h1>Open a report</h1>
+      <p>Drop an A4 PDF here to preview the flipbook, or choose a file.</p>
+      <label class="pick">Choose PDF<input id="file" type="file" accept="application/pdf" hidden /></label>
+      <p class="note">Tip: if pages stay blank, open this file in a normal browser tab rather than a sandboxed preview.</p>
+    </div>
+  </div>
+
+  <div class="loader" id="loader">
+    <div>
+      <div class="lab">Rendering pages — <b id="loadN">0 / 0</b></div>
+      <div class="meter"><i id="loadBar"></i></div>
+    </div>
+  </div>
+
+<script>
+/* ===================== CONFIG ===================== */
+const CONFIG = {
+  pdfUrl: "assets/JaronYoshimura_Individual Report_BMD3R1.pdf",
+  title:  "BMD3ID1 — Portfolio Report",
+  renderWidthPx: 1400,                   // page render resolution (~165dpi A4)
+};
+/* ================================================= */
+
+const $ = id => document.getElementById(id);
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const el = {
+  drop:$("drop"),dropInner:$("dropInner"),loader:$("loader"),loadN:$("loadN"),loadBar:$("loadBar"),
+  stage:$("stage"),book:$("book"),page:$("page"),pageImg:$("pageImg"),
+  prev:$("prev"),next:$("next"),counter:$("counter"),cur:$("cur"),tot:$("tot"),
+  track:$("track"),trackFill:$("trackFill"),title:$("title"),dl:$("dl"),
+};
+el.title.textContent = CONFIG.title;
+document.title = CONFIG.title;
+
+let pages=[], pageAR=[], count=0, current=0, busy=false, pdfBlobUrl=null;
+
+/* Fail loudly: show a real message instead of a blank screen */
+function fail(msg){
+  el.loader.classList.remove("on");
+  el.drop.classList.remove("hidden");
+  el.dropInner.innerHTML =
+    '<h1 class="err">'+msg.title+'</h1><p>'+msg.body+'</p>'+
+    '<label class="pick">Choose PDF<input id="file" type="file" accept="application/pdf" hidden /></label>';
+  wireFileInput();
+}
+
+/* PDF.js worker: build a same-origin blob worker so it loads across browsers,
+   local files, and most hosts. Fall back to the CDN url (fake worker) if blocked. */
+async function initWorker(){
+  const u="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  try{
+    const code = await (await fetch(u)).text();
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      URL.createObjectURL(new Blob([code],{type:"application/javascript"}));
+  }catch(e){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = u;   // PDF.js will fall back to main-thread rendering
+  }
+}
+
+async function load(source){
+  if(typeof pdfjsLib==="undefined"){
+    fail({title:"PDF engine didn’t load",
+      body:"The PDF.js library was blocked from loading. This usually means a sandboxed preview with no network — open this file in a normal browser tab or on your live site."});
+    return;
+  }
+  el.drop.classList.add("hidden");
+  el.loader.classList.add("on");
+  try{
+    if(source.file){                    // keep a clean copy for the Download link
+      if(pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+      pdfBlobUrl = URL.createObjectURL(source.file);
+      source = {data: await source.file.arrayBuffer()};
+    }
+    const pdf = await pdfjsLib.getDocument(source).promise;
+    count = pdf.numPages; pages = new Array(count);
+    for(let i=1;i<=count;i++){
+      const pg = await pdf.getPage(i);
+      const base = pg.getViewport({scale:1});
+      const vp = pg.getViewport({scale: CONFIG.renderWidthPx / base.width});
+      const cv = document.createElement("canvas");
+      cv.width=Math.floor(vp.width); cv.height=Math.floor(vp.height);
+      const ctx=cv.getContext("2d",{alpha:false});
+      ctx.fillStyle="#fff"; ctx.fillRect(0,0,cv.width,cv.height);
+      await pg.render({canvasContext:ctx,viewport:vp}).promise;
+      pages[i-1]=await new Promise(r=>cv.toBlob(b=>r(URL.createObjectURL(b)),"image/jpeg",0.92));
+      pageAR[i-1]=cv.width/cv.height;     // remember each page's true shape (portrait vs landscape)
+      el.loadN.textContent=i+" / "+count;
+      el.loadBar.style.width=Math.round(i/count*100)+"%";
+    }
+    start();
+  }catch(err){
+    fail({title:"Couldn’t render that file",
+      body:"Reason: "+(err && err.message ? err.message : String(err))+". Try a different PDF, or open this page in a normal browser tab."});
+  }
+}
+
+function start(){
+  el.loader.classList.remove("on");
+  el.stage.hidden=false; el.counter.hidden=false; el.track.hidden=false;
+  el.tot.textContent=String(count).padStart(2,"0");
+  if(count>1){ el.prev.hidden=false; el.next.hidden=false; }
+  const href = CONFIG.pdfUrl ? encodeURI(CONFIG.pdfUrl) : pdfBlobUrl;
+  if(href){ el.dl.href=href; el.dl.hidden=false; }
+  current=0; fitBook(pageAR[0],false); el.pageImg.src=pages[0]; paint();
+}
+/* Size the stage frame to the current page's true aspect ratio (w/h), fit to the
+   viewport. Pages aren't all the same shape — first/last are portrait, the rest
+   are landscape — so the frame reshapes per page instead of letterboxing them. */
+function fitBook(ar,animate){
+  if(!ar) return;
+  el.book.style.transition = animate===false ? "none" : "";
+  const maxW=window.innerWidth*0.92, maxH=window.innerHeight*0.82;
+  let h=maxH, w=h*ar;
+  if(w>maxW){ w=maxW; h=w/ar; }
+  el.book.style.width=w+"px";
+  el.book.style.height=h+"px";
+}
+window.addEventListener("resize",()=>fitBook(pageAR[current],false));
+function paint(){
+  el.cur.textContent=String(current+1).padStart(2,"0");
+  el.prev.disabled=current<=0; el.next.disabled=current>=count-1;
+  el.trackFill.style.width=(count<=1?100:(current/(count-1))*100)+"%";
+}
+
+function turn(dir){
+  if(busy) return;
+  const target=current+dir;
+  if(target<0||target>=count) return;
+  if(reduceMotion){ current=target; fitBook(pageAR[target],false); el.pageImg.src=pages[current]; paint(); return; }
+
+  busy=true;
+  fitBook(pageAR[target]);               // reshape the frame to the page being revealed
+  const flipper=document.createElement("div"); flipper.className="flipper";
+  const front=document.createElement("div"); front.className="face front";
+  const shade=document.createElement("div"); shade.className="shade";
+  const img=document.createElement("img");
+  front.appendChild(img); front.appendChild(shade);
+  flipper.appendChild(front);            // single sheet, no back face
+
+  if(dir>0){
+    img.src=pages[current];
+    el.pageImg.src=pages[target];        // reveal destination beneath
+    el.book.appendChild(flipper);
+    void flipper.offsetWidth;
+    flipper.classList.add("next");
+  }else{
+    img.src=pages[target];
+    flipper.style.transform="rotateY(-90deg)"; // start edge-on (invisible) to avoid a flat first frame
+    el.book.appendChild(flipper);
+    void flipper.offsetWidth;
+    flipper.style.transform="";
+    flipper.classList.add("prev");
+  }
+
+  flipper.addEventListener("animationend", e=>{
+    if(e.target!==flipper) return;       // ignore the shade animation bubbling up
+    current=target; el.pageImg.src=pages[current];
+    flipper.remove(); busy=false; paint();
+  },{once:true});
+}
+
+/* input */
+el.next.addEventListener("click",e=>{e.stopPropagation();turn(+1);});
+el.prev.addEventListener("click",e=>{e.stopPropagation();turn(-1);});
+el.stage.addEventListener("click",e=>{
+  if(swiped){swiped=false;return;}
+  turn((e.clientX/window.innerWidth)<0.35 ? -1 : +1);
+});
+window.addEventListener("keydown",e=>{
+  if(["ArrowRight"," ","PageDown"].includes(e.key)){e.preventDefault();turn(+1);}
+  else if(["ArrowLeft","PageUp"].includes(e.key)){e.preventDefault();turn(-1);}
+});
+let sx=0,sy=0,st=0,swiped=false;
+el.stage.addEventListener("touchstart",e=>{const t=e.changedTouches[0];sx=t.clientX;sy=t.clientY;st=Date.now();},{passive:true});
+el.stage.addEventListener("touchend",e=>{
+  const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy,dt=Date.now()-st;
+  if(Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy)*1.4&&dt<700){swiped=true;turn(dx<0?+1:-1);}
+},{passive:true});
+
+/* dropzone */
+function wireFileInput(){
+  const input=$("file");
+  if(input) input.addEventListener("change",e=>{const f=e.target.files[0]; if(f) load({file:f});});
+}
+wireFileInput();
+["dragenter","dragover"].forEach(ev=>el.drop.addEventListener(ev,e=>{e.preventDefault();el.drop.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>el.drop.addEventListener(ev,e=>{e.preventDefault();el.drop.classList.remove("drag");}));
+el.drop.addEventListener("drop",e=>{const f=e.dataTransfer.files[0]; if(f&&f.type==="application/pdf") load({file:f});});
+
+/* boot */
+(async function(){
+  if(typeof pdfjsLib==="undefined"){
+    fail({title:"PDF engine didn’t load",
+      body:"The PDF.js library was blocked. Open this file in a normal browser tab or host it on your site."});
+    return;
+  }
+  await initWorker();
+  if(CONFIG.pdfUrl){
+    el.drop.classList.add("hidden");
+    if(location.protocol==="file:"){
+      fail({title:"Use a local server to test",
+        body:"You set a PDF path, but browsers won't load a file by path from file://. In VS Code, install the Live Server extension and click \"Go Live\" (or run: python3 -m http.server), then open the localhost URL. On your hosted site it works with no changes. You can still drop a PDF below to preview right now."});
+      return;
+    }
+    load({url:encodeURI(CONFIG.pdfUrl)});
+  } else {
+    el.drop.classList.remove("hidden");
+  }
+})();
+</script>
+</body>
+</html>
